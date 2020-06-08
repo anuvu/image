@@ -1240,7 +1240,7 @@ func (c *copier) copyBlobFromStream(ctx context.Context, srcStream io.Reader, sr
 		logrus.Debugf("Using original blob without modification for encrypted blob")
 		compressionOperation = types.PreserveOriginal
 		inputInfo = srcInfo
-	} else if canModifyBlob && c.dest.DesiredLayerCompression() == types.Compress && !isCompressed {
+	} else if canModifyBlob && c.dest.DesiredBlobCompression(srcInfo) == types.Compress && !isCompressed {
 		logrus.Debugf("Compressing blob on the fly")
 		compressionOperation = types.Compress
 		pipeReader, pipeWriter := io.Pipe()
@@ -1253,7 +1253,7 @@ func (c *copier) copyBlobFromStream(ctx context.Context, srcStream io.Reader, sr
 		destStream = pipeReader
 		inputInfo.Digest = ""
 		inputInfo.Size = -1
-	} else if canModifyBlob && c.dest.DesiredLayerCompression() == types.Compress && isCompressed && desiredCompressionFormat.Name() != compressionFormat.Name() {
+	} else if canModifyBlob && c.dest.DesiredBlobCompression(srcInfo) == types.Compress && isCompressed && desiredCompressionFormat.Name() != compressionFormat.Name() {
 		// When the blob is compressed, but the desired format is different, it first needs to be decompressed and finally
 		// re-compressed using the desired format.
 		logrus.Debugf("Blob will be converted")
@@ -1273,7 +1273,7 @@ func (c *copier) copyBlobFromStream(ctx context.Context, srcStream io.Reader, sr
 		destStream = pipeReader
 		inputInfo.Digest = ""
 		inputInfo.Size = -1
-	} else if canModifyBlob && c.dest.DesiredLayerCompression() == types.Decompress && isCompressed {
+	} else if canModifyBlob && c.dest.DesiredBlobCompression(srcInfo) == types.Decompress && isCompressed {
 		logrus.Debugf("Blob will be decompressed")
 		compressionOperation = types.Decompress
 		s, err := decompressor(destStream)
