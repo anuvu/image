@@ -21,52 +21,60 @@ func dockerRefFromString(t *testing.T, s string) dockerReference {
 	return dockerRef
 }
 
-func TestConfiguredSignatureStorageBase(t *testing.T) {
+func TestSignatureStorageBaseURL(t *testing.T) {
 	// Error reading configuration directory (/dev/null is not a directory)
-	_, err := configuredSignatureStorageBase(&types.SystemContext{RegistriesDirPath: "/dev/null"},
+	_, err := SignatureStorageBaseURL(&types.SystemContext{RegistriesDirPath: "/dev/null"},
 		dockerRefFromString(t, "//busybox"), false)
 	assert.Error(t, err)
 
 	// No match found
+	// expect default user storage base
 	emptyDir, err := ioutil.TempDir("", "empty-dir")
 	require.NoError(t, err)
 	defer os.RemoveAll(emptyDir)
-	base, err := configuredSignatureStorageBase(&types.SystemContext{RegistriesDirPath: emptyDir},
+	base, err := SignatureStorageBaseURL(&types.SystemContext{RegistriesDirPath: emptyDir},
 		dockerRefFromString(t, "//this/is/not/in/the:configuration"), false)
 	assert.NoError(t, err)
-	assert.Nil(t, base)
+	assert.NotNil(t, base)
+	assert.Equal(t, "file://"+filepath.Join(os.Getenv("HOME"), defaultUserDockerDir, "//this/is/not/in/the"), base.String())
 
 	// Invalid URL
-	_, err = configuredSignatureStorageBase(&types.SystemContext{RegistriesDirPath: "fixtures/registries.d"},
+	_, err = SignatureStorageBaseURL(&types.SystemContext{RegistriesDirPath: "fixtures/registries.d"},
 		dockerRefFromString(t, "//localhost/invalid/url/test"), false)
 	assert.Error(t, err)
 
 	// Success
-	base, err = configuredSignatureStorageBase(&types.SystemContext{RegistriesDirPath: "fixtures/registries.d"},
+	base, err = SignatureStorageBaseURL(&types.SystemContext{RegistriesDirPath: "fixtures/registries.d"},
 		dockerRefFromString(t, "//example.com/my/project"), false)
 	assert.NoError(t, err)
 	require.NotNil(t, base)
-	assert.Equal(t, "https://sigstore.example.com/my/project", (*url.URL)(base).String())
+	assert.Equal(t, "https://sigstore.example.com/my/project", base.String())
 }
 
 func TestRegistriesDirPath(t *testing.T) {
 	const nondefaultPath = "/this/is/not/the/default/registries.d"
 	const variableReference = "$HOME"
 	const rootPrefix = "/root/prefix"
-
+	tempHome, err := ioutil.TempDir("", "tempHome")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempHome)
+	var userRegistriesDir = filepath.FromSlash(".config/containers/registries.d")
+	userRegistriesDirPath := filepath.Join(tempHome, userRegistriesDir)
 	for _, c := range []struct {
-		sys      *types.SystemContext
-		expected string
+		sys             *types.SystemContext
+		userFilePresent bool
+		expected        string
 	}{
 		// The common case
-		{nil, systemRegistriesDirPath},
+		{nil, false, systemRegistriesDirPath},
 		// There is a context, but it does not override the path.
-		{&types.SystemContext{}, systemRegistriesDirPath},
+		{&types.SystemContext{}, false, systemRegistriesDirPath},
 		// Path overridden
-		{&types.SystemContext{RegistriesDirPath: nondefaultPath}, nondefaultPath},
+		{&types.SystemContext{RegistriesDirPath: nondefaultPath}, false, nondefaultPath},
 		// Root overridden
 		{
 			&types.SystemContext{RootForImplicitAbsolutePaths: rootPrefix},
+			false,
 			filepath.Join(rootPrefix, systemRegistriesDirPath),
 		},
 		// Root and path overrides present simultaneously,
@@ -75,12 +83,33 @@ func TestRegistriesDirPath(t *testing.T) {
 				RootForImplicitAbsolutePaths: rootPrefix,
 				RegistriesDirPath:            nondefaultPath,
 			},
+			false,
+			nondefaultPath,
+		},
+		// User registries.d present, not overridden
+		{&types.SystemContext{}, true, userRegistriesDirPath},
+		// Context and user User registries.d preset simultaneously
+		{&types.SystemContext{RegistriesDirPath: nondefaultPath}, true, nondefaultPath},
+		// Root and user registries.d overrides present simultaneously,
+		{
+			&types.SystemContext{
+				RootForImplicitAbsolutePaths: rootPrefix,
+				RegistriesDirPath:            nondefaultPath,
+			},
+			true,
 			nondefaultPath,
 		},
 		// No environment expansion happens in the overridden paths
-		{&types.SystemContext{RegistriesDirPath: variableReference}, variableReference},
+		{&types.SystemContext{RegistriesDirPath: variableReference}, false, variableReference},
 	} {
-		path := registriesDirPath(c.sys)
+		if c.userFilePresent {
+			err := os.MkdirAll(userRegistriesDirPath, 0700)
+			require.NoError(t, err)
+		} else {
+			err := os.RemoveAll(userRegistriesDirPath)
+			require.NoError(t, err)
+		}
+		path := registriesDirPathWithHomeDir(c.sys, tempHome)
 		assert.Equal(t, c.expected, path)
 	}
 }
@@ -183,7 +212,7 @@ func TestLoadAndMergeConfig(t *testing.T) {
 	}, config)
 }
 
-func TestRegistryConfigurationSignaureTopLevel(t *testing.T) {
+func TestRegistryConfigurationSignatureTopLevel(t *testing.T) {
 	config := registryConfiguration{
 		DefaultDocker: &registryNamespace{SigStore: "=default", SigStoreStaging: "=default+w"},
 		Docker:        map[string]registryNamespace{},
@@ -255,7 +284,6 @@ func TestSignatureStorageBaseSignatureStorageURL(t *testing.T) {
 	const mdInput = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	const mdMapped = "sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-	assert.True(t, signatureStorageURL(nil, mdInput, 0) == nil)
 	for _, c := range []struct {
 		base     string
 		index    int
@@ -275,4 +303,14 @@ func TestSignatureStorageBaseSignatureStorageURL(t *testing.T) {
 		res := signatureStorageURL(url, mdInput, c.index)
 		assert.Equal(t, expectedURL, res, c.expected)
 	}
+}
+
+func TestBuiltinDefaultSignatureStorageDir(t *testing.T) {
+	base := builtinDefaultSignatureStorageDir(0)
+	assert.NotNil(t, base)
+	assert.Equal(t, "file://"+defaultDockerDir, base.String())
+
+	base = builtinDefaultSignatureStorageDir(1000)
+	assert.NotNil(t, base)
+	assert.Equal(t, "file://"+filepath.Join(os.Getenv("HOME"), defaultUserDockerDir), base.String())
 }

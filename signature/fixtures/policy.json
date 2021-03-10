@@ -75,6 +75,48 @@
                     }
                 }
             ],
+            "private-mirror:5000/vendor-mirror": [
+                {
+                    "type": "signedBy",
+                    "keyType": "GPGKeys",
+                    "keyPath": "/keys/vendor-gpg-keyring",
+                    "signedIdentity": {
+                        "type": "remapIdentity",
+                        "prefix": "private-mirror:5000/vendor-mirror",
+                        "signedPrefix": "vendor.example.com"
+                    }
+                }
+            ],
+            "*.access.redhat.com": [
+                {
+                    "type": "signedBy",
+                    "keyType": "signedByGPGKeys",
+                    "keyPath": "/keys/RH-key-signing-key-gpg-keyring",
+                    "signedIdentity": {
+                        "type": "matchRepoDigestOrExact"
+                    }
+                }
+            ],
+            "*.redhat.com": [
+                {
+                    "type": "signedBy",
+                    "keyType": "signedByGPGKeys",
+                    "keyPath": "/keys/RH-key-signing-key-gpg-keyring",
+                    "signedIdentity": {
+                        "type": "matchRepoDigestOrExact"
+                    }
+                }
+            ],
+            "*.com": [
+                {
+                    "type": "signedBy",
+                    "keyType": "signedByGPGKeys",
+                    "keyPath": "/keys/RH-key-signing-key-gpg-keyring",
+                    "signedIdentity": {
+                        "type": "matchRepoDigestOrExact"
+                    }
+                }
+            ],
             "bogus/key-data-example": [
                 {
                     "type": "signedBy",

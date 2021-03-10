@@ -123,23 +123,13 @@ func TestRefMatchesPrefix(t *testing.T) {
 	}
 }
 
-func TestConfigPath(t *testing.T) {
+func TestNewConfigWrapper(t *testing.T) {
 	const nondefaultPath = "/this/is/not/the/default/registries.conf"
 	const variableReference = "$HOME"
 	const rootPrefix = "/root/prefix"
-	oldHomeEnv, hasHomeEnv := os.LookupEnv("HOME")
 	tempHome, err := ioutil.TempDir("", "tempHome")
 	require.NoError(t, err)
-	err = os.Setenv("HOME", tempHome)
-	require.NoError(t, err)
-	defer func() {
-		os.RemoveAll(tempHome)
-		if hasHomeEnv {
-			os.Setenv("HOME", oldHomeEnv)
-		} else {
-			os.Unsetenv("HOME")
-		}
-	}()
+	defer os.RemoveAll(tempHome)
 	var userRegistriesFile = filepath.FromSlash(".config/containers/registries.conf")
 	userRegistriesFilePath := filepath.Join(tempHome, userRegistriesFile)
 
@@ -194,7 +184,7 @@ func TestConfigPath(t *testing.T) {
 		} else {
 			os.Remove(userRegistriesFilePath)
 		}
-		path := ConfigPath(c.sys)
+		path := newConfigWrapperWithHomeDir(c.sys, tempHome).configPath
 		assert.Equal(t, c.expected, path)
 	}
 }
@@ -271,9 +261,10 @@ func TestFindUnqualifiedSearchRegistries(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 4, len(registries))
 
-	unqRegs, err := UnqualifiedSearchRegistries(sys)
+	unqRegs, origin, err := UnqualifiedSearchRegistriesWithOrigin(sys)
 	assert.Nil(t, err)
 	assert.Equal(t, []string{"registry-a.com", "registry-c.com", "registry-d.com"}, unqRegs)
+	assert.Equal(t, "testdata/unqualified-search.conf", origin)
 
 	_, err = UnqualifiedSearchRegistries(&types.SystemContext{
 		SystemRegistriesConfPath:    "testdata/invalid-search.conf",
@@ -381,7 +372,7 @@ insecure = true`), 0600)
 
 	ctx := &types.SystemContext{SystemRegistriesConfPath: configFile.Name()}
 
-	configCache = make(map[configWrapper]*V2RegistriesConf)
+	InvalidateCache()
 	registries, err := GetRegistries(ctx)
 	assert.Nil(t, err)
 	assert.Equal(t, 4, len(registries))
@@ -398,7 +389,7 @@ insecure = true`), 0600)
 func TestInvalidateCache(t *testing.T) {
 	ctx := &types.SystemContext{SystemRegistriesConfPath: "testdata/invalidate-cache.conf"}
 
-	configCache = make(map[configWrapper]*V2RegistriesConf)
+	InvalidateCache()
 	registries, err := GetRegistries(ctx)
 	assert.Nil(t, err)
 	assert.Equal(t, 4, len(registries))
@@ -523,7 +514,7 @@ func TestTryUpdatingCache(t *testing.T) {
 		SystemRegistriesConfPath:    "testdata/try-update-cache-valid.conf",
 		SystemRegistriesConfDirPath: "testdata/this-does-not-exist",
 	}
-	configCache = make(map[configWrapper]*V2RegistriesConf)
+	InvalidateCache()
 	registries, err := TryUpdatingCache(ctx)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(registries.Registries))
@@ -545,7 +536,7 @@ func TestRegistriesConfDirectory(t *testing.T) {
 		SystemRegistriesConfDirPath: "testdata/registries.conf.d",
 	}
 
-	configCache = make(map[configWrapper]*V2RegistriesConf)
+	InvalidateCache()
 	registries, err := TryUpdatingCache(ctx)
 	require.NoError(t, err)
 	assert.NotNil(t, registries)
@@ -557,4 +548,91 @@ func TestRegistriesConfDirectory(t *testing.T) {
 	reg, err := FindRegistry(ctx, "base.com/test:latest")
 	require.NoError(t, err)
 	assert.True(t, reg.Blocked)
+
+	usrs, origin, err := UnqualifiedSearchRegistriesWithOrigin(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"example-overwrite.com"}, usrs)
+	assert.Equal(t, "testdata/registries.conf.d/config-1.conf", origin)
+
+	// Test that unqualified-search-registries is merged correctly
+	usr, err := UnqualifiedSearchRegistries(&types.SystemContext{
+		SystemRegistriesConfPath:    "testdata/unqualified-search.conf",
+		SystemRegistriesConfDirPath: "testdata/registries.conf.d-usr1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"registry-a.com", "registry-c.com", "registry-d.com"}, usr) // Nothing overrides the base file
+
+	usr, err = UnqualifiedSearchRegistries(&types.SystemContext{
+		SystemRegistriesConfPath:    "testdata/unqualified-search.conf",
+		SystemRegistriesConfDirPath: "testdata/registries.conf.d-usr2",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, usr) // Search overridden with an empty array
+}
+
+func TestParseShortNameMode(t *testing.T) {
+	tests := []struct {
+		input    string
+		result   types.ShortNameMode
+		mustFail bool
+	}{
+		{"disabled", types.ShortNameModeDisabled, false},
+		{"enforcing", types.ShortNameModeEnforcing, false},
+		{"permissive", types.ShortNameModePermissive, false},
+		{"", -1, true},
+		{"xxx", -1, true},
+	}
+
+	for _, test := range tests {
+		shortName, err := parseShortNameMode(test.input)
+		if test.mustFail {
+			assert.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		assert.Equal(t, test.result, shortName)
+	}
+}
+
+func TestGetShortNameMode(t *testing.T) {
+	tests := []struct {
+		path     string
+		mode     types.ShortNameMode
+		mustFail bool
+	}{
+		{
+			"testdata/aliases.conf",
+			types.ShortNameModeEnforcing,
+			false,
+		},
+		{
+			"testdata/registries.conf.d/config-2.conf",
+			types.ShortNameModePermissive,
+			false,
+		},
+		{
+			"testdata/registries.conf.d/config-3.conf",
+			types.ShortNameModePermissive, // empty -> default to permissive
+			false,
+		},
+		{
+			"testdata/invalid-short-name-mode.conf",
+			-1,
+			true,
+		},
+	}
+
+	for _, test := range tests {
+		sys := &types.SystemContext{
+			SystemRegistriesConfPath:    test.path,
+			SystemRegistriesConfDirPath: "testdata/this-does-not-exist",
+		}
+		mode, err := GetShortNameMode(sys)
+		if test.mustFail {
+			assert.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		assert.Equal(t, test.mode, mode, "%s", test.path)
+	}
 }

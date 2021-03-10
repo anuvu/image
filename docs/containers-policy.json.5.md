@@ -65,7 +65,8 @@ The `atomic:` transport refers to images in an Atomic Registry.
 
 Supported scopes use the form _hostname_[`:`_port_][`/`_namespace_[`/`_imagestream_ [`:`_tag_]]],
 i.e. either specifying a complete name of a tagged image, or prefix denoting
-a host/namespace/image stream.
+a host/namespace/image stream or a wildcarded expression for matching all
+subdomains. For wildcarded subdomain matching, `*.example.com` is a valid case, but `example*.*.com` is not.
 
 *Note:* The _hostname_ and _port_ refer to the Docker registry host and port (the one used
 e.g. for `docker pull`), _not_ to the OpenShift API host and port.
@@ -90,7 +91,9 @@ Scopes matching individual images are named Docker references *in the fully expa
 using a tag or digest. For example, `docker.io/library/busybox:latest` (*not* `busybox:latest`).
 
 More general scopes are prefixes of individual-image scopes, and specify a repository (by omitting the tag or digest),
-a repository namespace, or a registry host (by only specifying the host name).
+a repository namespace, or a registry host (by only specifying the host name)
+or a wildcarded expression for matching all subdomains. For wildcarded subdomain
+matching, `*.example.com` is a valid case, but `example*.*.com` is not.
 
 ### `oci:`
 
@@ -177,7 +180,7 @@ One of the following alternatives are supported:
   ```json
   {"type":"matchRepoDigestOrExact"}
   ```
-- The identity in the signature must be in the same repository as the image identity.  This is useful e.g. to pull an image using the `:latest` tag when the image is signed with a tag specifing an exact image version.
+- The identity in the signature must be in the same repository as the image identity.  This is useful e.g. to pull an image using the `:latest` tag when the image is signed with a tag specifying an exact image version.
 
   ```json
   {"type":"matchRepository"}
@@ -198,6 +201,30 @@ One of the following alternatives are supported:
   {
       "type": "exactRepository",
       "dockerRepository": docker_repository_value
+  }
+  ```
+- Prefix remapping:
+
+  If the image identity matches the specified prefix, that prefix is replaced by the specified “signed prefix”
+  (otherwise it is used as unchanged and no remapping takes place);
+  matching then follows the `matchRepoDigestOrExact` semantics documented above
+  (i.e. if the image identity carries a tag, the identity in the signature must exactly match,
+  if it uses a digest reference, the repository must match).
+
+  The `prefix` and `signedPrefix` values can be either host[:port] values
+  (matching exactly the same host[:port], string),
+  repository namespaces, or repositories (i.e. they must not contain tags/digests),
+  and match as prefixes *of the fully expanded form*.
+  For example, `docker.io/library/busybox` (*not* `busybox`) to specify that single repository,
+  or `docker.io/library` (not an empty string) to specify the parent namespace of `docker.io/library/busybox`==`busybox`).
+
+  The `prefix` value is usually the same as the scope containing the parent `signedBy` requirement.
+
+  ```js
+  {
+      "type": "remapIdentity",
+      "prefix": prefix,
+      "signedPrefix": prefix,
   }
   ```
 
@@ -229,6 +256,8 @@ selectively allow individual transports and scopes as desired.
             /* Similarly, allow installing the “official” busybox images.  Note how the fully expanded
                form, with the explicit /library/, must be used. */
             "docker.io/library/busybox": [{"type": "insecureAcceptAnything"}]
+            /* Allow installing images from all subdomains */
+            "*.temporary-project.example.com": [{"type": "insecureAcceptAnything"}]
             /* Other docker: images use the global default policy and are rejected */
         },
         "dir": {
@@ -259,6 +288,21 @@ selectively allow individual transports and scopes as desired.
                     "type": "signedBy",
                     "keyType": "GPGKeys",
                     "keyPath": "/path/to/reviewer-pubkey.gpg"
+                }
+            ],
+            /* A way to mirror many repositories from a single vendor */
+            "private-mirror:5000/vendor-mirror": [
+                { /* Require the image to be signed by the original vendor, using the vendor's repository location.
+                     For example, private-mirror:5000/vendor-mirror/productA/image1:latest needs to be signed as
+                     vendor.example/productA/image1:latest . */
+                    "type": "signedBy",
+                    "keyType": "GPGKeys",
+                    "keyPath": "/path/to/vendor-pubkey.gpg",
+                    "signedIdentity": {
+                        "type": "remapIdentity",
+                        "prefix": "private-mirror:5000/vendor-mirror",
+                        "signedPrefix": "vendor.example.com",
+                    }
                 }
             ]
         }

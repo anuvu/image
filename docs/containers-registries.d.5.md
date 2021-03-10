@@ -12,7 +12,7 @@ The registries configuration directory contains configuration for various regist
 so that the configuration does not have to be provided in command-line options over and over for every command,
 and so that it can be shared by all users of containers/image.
 
-By default (unless overridden at compile-time), the registries configuration directory is `/etc/containers/registries.d`;
+By default, the registries configuration directory is `$HOME/.config/containers/registries.d` if it exists, otherwise `/etc/containers/registries.d` (unless overridden at compile-time);
 applications may allow using a different directory instead.
 
 ## Directory Structure
@@ -61,6 +61,11 @@ more general scopes is ignored.  For example, if _any_ configuration exists for
 `docker.io/library/busybox`, the configuration for `docker.io` is ignored
 (even if some element of the configuration is defined for `docker.io` and not for `docker.io/library/busybox`).
 
+### Built-in Defaults
+
+If no `docker` section can be found for the container image, and no `default-docker` section is configured,
+the default directory, `/var/lib/containers/sigstore` for root and `$HOME/.local/share/containers/sigstore` for unprivileged user,  will be used for reading and writing signatures.
+
 ## Individual Configuration Sections
 
 A single configuration section is selected for a container image using the process
@@ -76,6 +81,7 @@ described above.  The configuration section is a YAML mapping, with the followin
 
    This key is optional; if it is missing, no signature storage is defined (no signatures
    are download along with images, adding new signatures is possible only if `sigstore-staging` is defined).
+
 
 ## Examples
 
