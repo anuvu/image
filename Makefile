@@ -68,7 +68,7 @@ tools: .install.gitvalidation .install.golangci-lint .install.golint
 
 .install.golangci-lint:
 	if [ ! -x "$(GOBIN)/golangci-lint" ]; then \
-		curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s -- -b $(GOBIN) v1.21.0; \
+		curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s -- -b $(GOBIN) v1.35.2; \
 	fi
 
 .install.golint:
@@ -96,7 +96,7 @@ test-skopeo:
 		cd $${skopeo_path} && \
 		GO111MODULE="on" go mod edit -replace $${project_module}=$${project_path} && \
 		make vendor && \
-		make BUILDTAGS="$(BUILDTAGS)" binary-local test-unit-local && \
+		make BUILDTAGS="$(BUILDTAGS)" bin/skopeo test-unit-local && \
 		$(SUDO) make BUILDTAGS="$(BUILDTAGS)" check && \
 		rm -rf $${skopeo_path}
 

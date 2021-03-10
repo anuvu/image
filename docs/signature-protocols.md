@@ -9,7 +9,7 @@ or trivially; for others, the protocol extensions described below are necessary.
 ### Usage
 
 Any existing docker/distribution registry, whether or not it natively supports signatures,
-can be augmented with separate signature storage by configuring a signature storage URL in [`registries.d`](registries.d.md).
+can be augmented with separate signature storage by configuring a signature storage URL in [`registries.d`](containers-registries.d.md).
 `registries.d` can be configured to use one storage URL for a whole docker/distribution server,
 or also separate URLs for smaller namespaces or individual repositories within the server
 (which e.g. allows image authors to manage their own signature storage while publishing
@@ -48,7 +48,7 @@ where _digest-algo_`:`_digest-value_ is a manifest digest usable for referencing
 the signature storage is always disambiguated using digest references).
 Note that in the URLs used for signatures,
 _digest-algo_ and _digest-value_ are separated using the `=` character,
-not `:` like when acessing the manifest using the docker/distribution API.
+not `:` like when accessing the manifest using the docker/distribution API.
 
 Within the URL, _index_ is a decimal integer (in the canonical form), starting with 1.
 Signatures are stored at URLs with successive _index_ values; to read all of them, start with _index_=1,

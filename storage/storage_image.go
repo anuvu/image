@@ -45,6 +45,7 @@ var (
 type storageImageSource struct {
 	imageRef        storageReference
 	image           *storage.Image
+	systemContext   *types.SystemContext    // SystemContext used in GetBlob() to create temporary files
 	layerPosition   map[digest.Digest]int   // Where we are in reading a blob's layers
 	cachedManifest  []byte                  // A cached copy of the manifest, if already known, or nil
 	getBlobMutex    sync.Mutex              // Mutex to sync state for parallel GetBlob executions
@@ -96,6 +97,7 @@ func newImageSource(ctx context.Context, sys *types.SystemContext, imageRef stor
 	// Build the reader object.
 	image := &storageImageSource{
 		imageRef:        imageRef,
+		systemContext:   sys,
 		image:           img,
 		layerPosition:   make(map[digest.Digest]int),
 		SignatureSizes:  []int{},
@@ -131,8 +133,35 @@ func (s *storageImageSource) GetBlob(ctx context.Context, info types.BlobInfo, c
 	if info.Digest == image.GzippedEmptyLayerDigest {
 		return ioutil.NopCloser(bytes.NewReader(image.GzippedEmptyLayer)), int64(len(image.GzippedEmptyLayer)), nil
 	}
+
+	// NOTE: the blob is first written to a temporary file and subsequently
+	// closed.  The intention is to keep the time we own the storage lock
+	// as short as possible to allow other processes to access the storage.
 	rc, n, _, err = s.getBlobAndLayerID(info)
-	return rc, n, err
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rc.Close()
+
+	tmpFile, err := ioutil.TempFile(tmpdir.TemporaryDirectoryForBigFiles(s.systemContext), "")
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if _, err := io.Copy(tmpFile, rc); err != nil {
+		return nil, 0, err
+	}
+
+	if _, err := tmpFile.Seek(0, 0); err != nil {
+		return nil, 0, err
+	}
+
+	wrapper := ioutils.NewReadCloserWrapper(tmpFile, func() error {
+		defer os.Remove(tmpFile.Name())
+		return tmpFile.Close()
+	})
+
+	return wrapper, n, err
 }
 
 // getBlobAndLayer reads the data blob or filesystem layer which matches the digest and size, if given.
@@ -246,8 +275,7 @@ func (s *storageImageSource) LayerInfosForCopy(ctx context.Context, instanceDige
 	case imgspecv1.MediaTypeImageManifest:
 		uncompressedLayerType = imgspecv1.MediaTypeImageLayer
 	case manifest.DockerV2Schema1MediaType, manifest.DockerV2Schema1SignedMediaType, manifest.DockerV2Schema2MediaType:
-		// This is actually a compressed type, but there's no uncompressed type defined
-		uncompressedLayerType = manifest.DockerV2Schema2LayerMediaType
+		uncompressedLayerType = manifest.DockerV2SchemaLayerMediaTypeUncompressed
 	}
 
 	physicalBlobInfos := []types.BlobInfo{}
@@ -467,7 +495,9 @@ func (s *storageImageDestination) PutBlob(ctx context.Context, stream io.Reader,
 // (e.g. if the blob is a filesystem layer, this signifies that the changes it describes need to be applied again when composing a filesystem tree).
 // info.Digest must not be empty.
 // If canSubstitute, TryReusingBlob can use an equivalent equivalent of the desired blob; in that case the returned info may not match the input.
-// If the blob has been succesfully reused, returns (true, info, nil); info must contain at least a digest and size.
+// If the blob has been successfully reused, returns (true, info, nil); info must contain at least a digest and size, and may
+// include CompressionOperation and CompressionAlgorithm fields to indicate that a change to the compression type should be
+// reflected in the manifest that will be written.
 // If the transport can not reuse the requested blob, TryReusingBlob returns (false, {}, nil); it returns a non-nil error only on an unexpected failure.
 // May use and/or update cache.
 func (s *storageImageDestination) TryReusingBlob(ctx context.Context, blobinfo types.BlobInfo, cache types.BlobInfoCache, canSubstitute bool) (bool, types.BlobInfo, error) {
@@ -661,7 +691,7 @@ func (s *storageImageDestination) Commit(ctx context.Context, unparsedToplevel t
 			// Check if it's elsewhere and the caller just forgot to pass it to us in a PutBlob(),
 			// or to even check if we had it.
 			// Use none.NoCache to avoid a repeated DiffID lookup in the BlobInfoCache; a caller
-			// that relies on using a blob digest that has never been seeen by the store had better call
+			// that relies on using a blob digest that has never been seen by the store had better call
 			// TryReusingBlob; not calling PutBlob already violates the documented API, so there’s only
 			// so far we are going to accommodate that (if we should be doing that at all).
 			logrus.Debugf("looking for diffID for blob %+v", blob.Digest)
